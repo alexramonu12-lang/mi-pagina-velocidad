@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Medidor de Velocidad de Internet</title>
+  <style>
+    body{font-family:Inter, Arial, sans-serif;background:#f7fafc;margin:0;padding:24px;display:flex;align-items:center;justify-content:center;min-height:100vh}
+    .card{width:880px;max-width:96%;background:white;border-radius:12px;padding:24px;box-shadow:0 6px 30px rgba(2,6,23,0.08)}
+    h1{margin:0 0 8px;font-size:20px}
+    p.lead{margin:0 0 18px;color:#475569}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .stat{flex:1 1 200px;background:#f1f5f9;padding:14px;border-radius:8px;text-align:center}
+    .stat h2{margin:0;font-size:18px}
+    .stat p{margin:6px 0 0;font-size:14px;color:#334155}
+    button{background:#0ea5e9;border:none;color:white;padding:10px 16px;border-radius:8px;cursor:pointer;font-weight:600}
+    button[disabled]{opacity:0.5;cursor:not-allowed}
+    .log{margin-top:14px;background:#0f172a;color:#cbd5e1;padding:12px;border-radius:8px;font-family:monospace;font-size:13px;max-height:160px;overflow:auto}
+    footer{margin-top:14px;text-align:right;color:#94a3b8;font-size:13px}
+    .note{margin-top:10px;color:#475569}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Medidor de velocidad — prueba rápida</h1>
+    <p class="lead">Mide <strong>ping</strong>, <strong>descarga (download)</strong> y <strong>subida (upload)</strong>. Pulsa <em>Iniciar prueba</em>. (Resultados son aproximados — ver nota).</p>
+
+    <div class="row">
+      <div class="stat"><h2 id="ping">— ms</h2><p>Ping (latencia)</p></div>
+      <div class="stat"><h2 id="download">— Mbps</h2><p>Velocidad de descarga</p></div>
+      <div class="stat"><h2 id="upload">— Mbps</h2><p>Velocidad de subida</p></div>
+    </div>
+
+    <div style="margin-top:16px;display:flex;gap:8px;align-items:center">
+      <button id="start">Iniciar prueba</button>
+      <button id="clear">Limpiar</button>
+      <div style="flex:1"></div>
+      <div style="font-size:13px;color:#475569">Tiempo estimado: ~30–90s</div>
+    </div>
+
+    <div class="note">Nota: esta página intenta medir usando recursos públicos. Algunos servidores aplican políticas CORS que pueden limitar precisión. Para mayor fiabilidad abre el archivo desde un servidor local o usa versiones públicas con CORS habilitado.</div>
+
+    <div class="log" id="log" aria-live="polite"></div>
+    <footer>Hecho con JavaScript • Guardar como <code>speed_test.html</code> y abrir en tu navegador</footer>
+  </div>
+
+<script>
+const logEl = document.getElementById('log');
+function log(...args){ const t = new Date().toLocaleTimeString(); logEl.innerText = args.join(' ') + '\n' + logEl.innerText; }
+
+const pingEl = document.getElementById('ping');
+const dlEl = document.getElementById('download');
+const ulEl = document.getElementById('upload');
+const startBtn = document.getElementById('start');
+const clearBtn = document.getElementById('clear');
+
+startBtn.addEventListener('click', runTest);
+clearBtn.addEventListener('click', ()=>{ logEl.innerText=''; pingEl.innerText='— ms'; dlEl.innerText='— Mbps'; ulEl.innerText='— Mbps'; });
+
+async function measurePing(url, attempts = 6){
+  let times = [];
+  for(let i=0;i<attempts;i++){
+    const cacheBust = '?cb=' + Date.now() + Math.random();
+    const t0 = performance.now();
+    try{
+      const res = await fetch(url + cacheBust, {method:'HEAD', mode:'cors', cache:'no-store'});
+      const t1 = performance.now();
+      const ms = Math.round(t1 - t0);
+      times.push(ms);
+      log('Ping intento', i+1, ms+'ms');
+    }catch(e){
+      log('Ping fallo intento', i+1, e.message);
+    }
+    await new Promise(r=>setTimeout(r, 200));
+  }
+  if(times.length===0) return null;
+  times.sort((a,b)=>a-b);
+  // devolver mediana
+  const mid = Math.floor(times.length/2);
+  return times[mid];
+}
+
+async function downloadTest(url){
+  // descarga un recurso y mide bytes/seg
+  const cacheBust = '?cb=' + Date.now() + Math.random();
+  const t0 = performance.now();
+  try{
+    const res = await fetch(url + cacheBust, {method:'GET', mode:'cors', cache:'no-store'});
+    const t1 = performance.now();
+    // intenta obtener tamaño desde header
+    let bytes = 0;
+    const cl = res.headers.get('content-length');
+    if(cl) bytes = parseInt(cl,10);
+    else{
+      const blob = await res.blob();
+      bytes = blob.size;
+    }
+    const t2 = performance.now();
+    const durationSec = (t2 - t0)/1000;
+    const mbps = (bytes * 8) / (durationSec * 1e6);
+    log('Descargado', Math.round(bytes/1024), 'KB en', durationSec.toFixed(2)+'s —', mbps.toFixed(2),'Mbps');
+    return {bytes, durationSec, mbps};
+  }catch(e){
+    log('Error descarga:', e.message);
+    return null;
+  }
+}
+
+async function uploadTest(endpoint, sizeBytes = 5 * 1024 * 1024){
+  // genera un blob de tamaño sizeBytes y lo sube
+  const buffer = new Uint8Array(sizeBytes);
+  // rellena con datos aleatorios para evitar compresión
+  for (let i = 0; i < buffer.length; i += 4096) buffer[i] = Math.floor(Math.random() * 256);
+  const blob = new Blob([buffer]);
+  const t0 = performance.now();
+  try{
+    const res = await fetch(endpoint, {method:'POST', body: blob, mode:'cors', cache:'no-store'});
+    const t1 = performance.now();
+    const durationSec = (t1 - t0)/1000;
+    const mbps = (sizeBytes * 8) / (durationSec * 1e6);
+    log('Subida', Math.round(sizeBytes/1024), 'KB en', durationSec.toFixed(2)+'s —', mbps.toFixed(2),'Mbps');
+    return {bytes:sizeBytes, durationSec, mbps};
+  }catch(e){
+    log('Error subida:', e.message);
+    return null;
+  }
+}
+
+async function runTest(){
+  startBtn.disabled = true;
+  log('--- Iniciando prueba ---');
+
+  // URLs de prueba (se usan recursos públicos; si alguno falla puede deberse a CORS)
+  const smallUrl = 'https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js';
+  const bigUrl = 'https://speed.hetzner.de/10MB.bin';
+  const uploadEndpoint = 'https://httpbin.org/post';
+
+  log('Midiendo ping...');
+  const ping = await measurePing(smallUrl, 6);
+  if(ping===null){ pingEl.innerText='N/D'; log('Ping no disponible'); } else { pingEl.innerText = ping + ' ms'; }
+
+  log('Midiendo descarga (pequeña)...');
+  const dl1 = await downloadTest(smallUrl);
+  log('Midiendo descarga (más grande) — esto toma más tiempo...');
+  const dl2 = await downloadTest(bigUrl);
+
+  // combinar resultados si ambos ok
+  let finalDl = null;
+  if(dl1 && dl2) finalDl = (dl1.mbps + dl2.mbps*3)/4; // ponderar más al archivo grande
+  else if(dl2) finalDl = dl2.mbps;
+  else if(dl1) finalDl = dl1.mbps;
+
+  if(finalDl){ dlEl.innerText = finalDl.toFixed(2) + ' Mbps'; }
+  else { dlEl.innerText = 'N/D'; log('Descarga no disponible'); }
+
+  log('Midiendo subida (esto puede fallar si endpoint bloquea CORS)...');
+  const up = await uploadTest(uploadEndpoint, 4 * 1024 * 1024);
+  if(up) ulEl.innerText = up.mbps.toFixed(2) + ' Mbps'; else { ulEl.innerText = 'N/D'; log('Subida no disponible o bloqueada por CORS'); }
+
+  log('--- Prueba finalizada ---');
+  startBtn.disabled = false;
+}
+</script>
+</body>
+</html>
